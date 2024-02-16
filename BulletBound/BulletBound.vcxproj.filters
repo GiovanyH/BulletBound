@@ -38,12 +38,15 @@
     <ClInclude Include="glad.h">
       <Filter>Arquivos de Cabeçalho\glad</Filter>
     </ClInclude>
+    <ClInclude Include="gio_filesystem.h">
+      <Filter>Arquivos de Cabeçalho</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="3.3.shader.vs">
+    <None Include="7.3.camera.fs">
       <Filter>Arquivos de Recurso</Filter>
     </None>
-    <None Include="3.3.shader.fs">
+    <None Include="7.3.camera.vs">
       <Filter>Arquivos de Recurso</Filter>
     </None>
   </ItemGroup>
