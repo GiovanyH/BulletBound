@@ -128,18 +128,28 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="application.cpp" />
     <ClCompile Include="gio_shader.h" />
     <ClCompile Include="glad.c" />
+    <ClCompile Include="imgui_impl_glfw.cpp" />
+    <ClCompile Include="imgui_impl_opengl3.cpp" />
     <ClCompile Include="khrplatform.h" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\..\..\Downloads\imgui-master\imgui-master\backends\imgui_impl_glfw.h" />
+    <ClInclude Include="..\..\..\..\Downloads\imgui-master\imgui-master\backends\imgui_impl_opengl3.h" />
+    <ClInclude Include="application.h" />
     <ClInclude Include="gio_filesystem.h" />
     <ClInclude Include="glad.h" />
+    <ClInclude Include="imgui_impl_opengl3_loader.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="7.3.camera.vs" />
     <None Include="7.3.camera.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="..\..\..\Imagens\seamless.png" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
