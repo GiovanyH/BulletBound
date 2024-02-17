@@ -71,18 +71,39 @@
     <ClInclude Include="application.h">
       <Filter>Arquivos de Cabeçalho</Filter>
     </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="7.3.camera.fs">
-      <Filter>Arquivos de Recurso</Filter>
-    </None>
-    <None Include="7.3.camera.vs">
-      <Filter>Arquivos de Recurso</Filter>
-    </None>
+    <ClInclude Include="gio_camera.h">
+      <Filter>Arquivos de Cabeçalho</Filter>
+    </ClInclude>
+    <ClInclude Include="gio_model.h">
+      <Filter>Arquivos de Cabeçalho</Filter>
+    </ClInclude>
+    <ClInclude Include="gio_mesh.h">
+      <Filter>Arquivos de Cabeçalho</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Image Include="..\..\..\Imagens\seamless.png">
       <Filter>Arquivos de Recurso\Textures</Filter>
     </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="g_buffer.vs">
+      <Filter>Arquivos de Recurso</Filter>
+    </None>
+    <None Include="g_buffer.fs">
+      <Filter>Arquivos de Recurso</Filter>
+    </None>
+    <None Include="deferred_shading.vs">
+      <Filter>Arquivos de Recurso</Filter>
+    </None>
+    <None Include="deferred_shading.fs">
+      <Filter>Arquivos de Recurso</Filter>
+    </None>
+    <None Include="deferred_light_box.vs">
+      <Filter>Arquivos de Recurso</Filter>
+    </None>
+    <None Include="deferred_light_box.fs">
+      <Filter>Arquivos de Recurso</Filter>
+    </None>
   </ItemGroup>
 </Project>

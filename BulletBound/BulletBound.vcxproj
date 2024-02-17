@@ -140,16 +140,23 @@
     <ClInclude Include="..\..\..\..\Downloads\imgui-master\imgui-master\backends\imgui_impl_glfw.h" />
     <ClInclude Include="..\..\..\..\Downloads\imgui-master\imgui-master\backends\imgui_impl_opengl3.h" />
     <ClInclude Include="application.h" />
+    <ClInclude Include="gio_camera.h" />
     <ClInclude Include="gio_filesystem.h" />
+    <ClInclude Include="gio_mesh.h" />
+    <ClInclude Include="gio_model.h" />
     <ClInclude Include="glad.h" />
     <ClInclude Include="imgui_impl_opengl3_loader.h" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="7.3.camera.vs" />
-    <None Include="7.3.camera.fs" />
+    <Image Include="..\..\..\Imagens\seamless.png" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="..\..\..\Imagens\seamless.png" />
+    <None Include="deferred_light_box.fs" />
+    <None Include="deferred_light_box.vs" />
+    <None Include="deferred_shading.fs" />
+    <None Include="deferred_shading.vs" />
+    <None Include="g_buffer.fs" />
+    <None Include="g_buffer.vs" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
