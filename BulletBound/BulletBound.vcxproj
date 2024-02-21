@@ -135,6 +135,7 @@
     <ClCompile Include="imgui_impl_opengl3.cpp" />
     <ClCompile Include="khrplatform.h" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="OS.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\..\..\Downloads\imgui-master\imgui-master\backends\imgui_impl_glfw.h" />
@@ -144,8 +145,10 @@
     <ClInclude Include="gio_filesystem.h" />
     <ClInclude Include="gio_mesh.h" />
     <ClInclude Include="gio_model.h" />
+    <ClInclude Include="gio_scene.h" />
     <ClInclude Include="glad.h" />
     <ClInclude Include="imgui_impl_opengl3_loader.h" />
+    <ClInclude Include="OS.h" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="..\..\..\Imagens\seamless.png" />

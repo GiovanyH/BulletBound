@@ -1,25 +1,7 @@
-#include "glad.h"
-#include <imgui.h>
-#include "imgui_impl_glfw.h"
-#include "imgui_impl_opengl3.h"
-#include <GLFW/glfw3.h>
+#include "OS.h"
 
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
+#include "gio_scene.h"
 
-#include "application.h"
-
-#include "gio_shader.h"
-#include "gio_camera.h"
-#include "gio_model.h"
-
-#include <iostream>
-
-void framebuffer_size_callback(GLFWwindow* window, int width, int height);
-void mouse_callback(GLFWwindow* window, double xpos, double ypos);
-void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
-void processInput(GLFWwindow* window);
 unsigned int loadTexture(const char* path, bool gammaCorrection);
 void renderQuad();
 void renderCube();
@@ -28,74 +10,195 @@ void renderCube();
 unsigned int SCR_WIDTH = 800;
 unsigned int SCR_HEIGHT = 600;
 
-// camera
-Camera camera(glm::vec3(0.0f, 0.0f, 5.0f));
-float lastX = (float)SCR_WIDTH / 2.0;
-float lastY = (float)SCR_HEIGHT / 2.0;
-bool firstMouse = true;
+// lighting info
+// -------------
+const unsigned int NR_LIGHTS = 32;
+std::vector<glm::vec3> lightPositions;
+std::vector<glm::vec3> lightColors;
 
-// timing
-float deltaTime = 0.0f;
-float lastFrame = 0.0f;
+unsigned int gBuffer, gPosition, gNormal, gAlbedoSpec, rboDepth, guiBuffer;
+
+std::vector<Entity> entities;
+std::vector<Model> models;
+std::vector<LineBox> lineBoxes;
+
+// Gizmo
+ViewportGizmo gizmo;
+
+Scene current_scene;
+
+bool ray_intersects_triangle(glm::vec3 ray_origin,
+    glm::vec3 ray_vector,
+    Triangle3& triangle,
+    glm::vec3& out_intersection_point)
+{
+    constexpr float epsilon = std::numeric_limits<float>::epsilon();
+
+    glm::vec3 edge1 = triangle.b - triangle.a;
+    glm::vec3 edge2 = triangle.c - triangle.a;
+    glm::vec3 ray_cross_e2 = cross(ray_vector, edge2);
+    float det = glm::dot(edge1, ray_cross_e2);
+
+    if (det > -epsilon && det < epsilon)
+        return false;    // This ray is parallel to this triangle.
+
+    float inv_det = 1.0 / det;
+    glm::vec3 s = ray_origin - triangle.a;
+    float u = inv_det * glm::dot(s, ray_cross_e2);
+
+    if (u < 0 || u > 1)
+        return false;
+
+    glm::vec3 s_cross_e1 = cross(s, edge1);
+    float v = inv_det * glm::dot(ray_vector, s_cross_e1);
+
+    if (v < 0 || u + v > 1)
+        return false;
+
+    // At this stage we can compute t to find out where the intersection point is on the line.
+    float t = inv_det * dot(edge2, s_cross_e1);
+
+    if (t > epsilon) // ray intersection
+    {
+        out_intersection_point = ray_origin + ray_vector * t;
+        return true;
+    }
+    else {
+        return false;
+    }
+}
+
+glm::vec3 intersection_point;
+
+void OS::render(Shader& shaderGeometryPass, Shader& shaderLightingPass, Shader& shaderLightBox)
+{
+    if (OS::display_width != SCR_WIDTH || OS::display_height != SCR_HEIGHT)
+    {
+        SCR_WIDTH = OS::display_width; SCR_HEIGHT = OS::display_height;
+
+        // position color buffer
+        glBindTexture(GL_TEXTURE_2D, gPosition);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
+        // normal color buffer
+        glBindTexture(GL_TEXTURE_2D, gNormal);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
+        // color + specular color buffer
+        glBindTexture(GL_TEXTURE_2D, gAlbedoSpec);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, SCR_WIDTH, SCR_HEIGHT);
+
+        glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
+    }
+
+    // render
+    // ------
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glm::mat4 projection = glm::perspective(glm::radians(OS::camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+    glm::mat4 view = OS::camera.GetViewMatrix();
+    glm::mat4 model = glm::mat4(1.0f);
+
+    // 1. geometry pass: render scene's geometry/color data into gbuffer
+    // -----------------------------------------------------------------
+    glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    gizmo.setMVP(projection * view * model);
+    gizmo.draw();
+
+    for (unsigned int i = 0; i < entities.size(); i++)
+    {
+        model = glm::mat4(1.0f);
+        model = glm::translate(model, entities[i].position);
+        model = glm::scale(model, glm::vec3(1.0f));
+
+        lineBoxes[i].position = entities[i].position;
+        lineBoxes[i].setMVP(projection * view * model);
+
+        lineBoxes[i].draw();
+    }
+
+    shaderGeometryPass.use();
+    shaderGeometryPass.setMat4("projection", projection);
+    shaderGeometryPass.setMat4("view", view);
+    for (unsigned int i = 0; i < entities.size(); i++)
+    {
+        model = glm::mat4(1.0f);
+        model = glm::translate(model, entities[i].position);
+        model = glm::scale(model, glm::vec3(1.0f));
+
+        shaderGeometryPass.setMat4("model", model);
+
+        models[i].Draw(shaderGeometryPass);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // 2. lighting pass: calculate lighting by iterating over a screen filled quad pixel-by-pixel using the gbuffer's content.
+    // -----------------------------------------------------------------------------------------------------------------------
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    shaderLightingPass.use();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, gPosition);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, gNormal);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, gAlbedoSpec);
+    // send light relevant uniforms
+    for (unsigned int i = 0; i < lightPositions.size(); i++)
+    {
+        shaderLightingPass.setVec3("lights[" + std::to_string(i) + "].Position", lightPositions[i]);
+        shaderLightingPass.setVec3("lights[" + std::to_string(i) + "].Color", lightColors[i]);
+        // update attenuation parameters and calculate radius
+        const float constant = 1.0f; // note that we don't send this to the shader, we assume it is always 1.0 (in our case)
+        const float linear = 0.7f;
+        const float quadratic = 1.8f;
+        shaderLightingPass.setFloat("lights[" + std::to_string(i) + "].Linear", linear);
+        shaderLightingPass.setFloat("lights[" + std::to_string(i) + "].Quadratic", quadratic);
+        // then calculate radius of light volume/sphere
+        const float maxBrightness = std::fmaxf(std::fmaxf(lightColors[i].r, lightColors[i].g), lightColors[i].b);
+        float radius = (-linear + std::sqrt(linear * linear - 4 * quadratic * (constant - (256.0f / 5.0f) * maxBrightness))) / (2.0f * quadratic);
+        shaderLightingPass.setFloat("lights[" + std::to_string(i) + "].Radius", radius);
+    }
+    shaderLightingPass.setVec3("viewPos", OS::camera.Position);
+    // finally render quad
+    renderQuad();
+
+    // 2.5. copy content of geometry's depth buffer to default framebuffer's depth buffer
+    // ----------------------------------------------------------------------------------
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, gBuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0); // write to default framebuffer
+    // blit to default framebuffer. Note that this may or may not work as the internal formats of both the FBO and default framebuffer have to match.
+    // the internal formats are implementation defined. This works on all of my systems, but if it doesn't on yours you'll likely have to write to the 		
+    // depth buffer in another shader stage (or somehow see to match the default framebuffer's internal format with the FBO's internal format).
+    glBlitFramebuffer(0, 0, SCR_WIDTH, SCR_HEIGHT, 0, 0, SCR_WIDTH, SCR_HEIGHT, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // 3. render lights on top of scene
+    // --------------------------------
+    shaderLightBox.use();
+    shaderLightBox.setMat4("projection", projection);
+    shaderLightBox.setMat4("view", view);
+    for (unsigned int i = 0; i < lightPositions.size(); i++)
+    {
+        model = glm::mat4(1.0f);
+        model = glm::translate(model, lightPositions[i]);
+        model = glm::scale(model, glm::vec3(0.125f));
+        shaderLightBox.setMat4("model", model);
+        shaderLightBox.setVec3("lightColor", lightColors[i]);
+        renderCube();
+    }
+
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
 
 int main()
 {
-    // glfw: initialize and configure
-    // ------------------------------
-    glfwInit();
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-
-#ifdef __APPLE__
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-#endif
-
-    // glfw window creation
-    // --------------------
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "LearnOpenGL", NULL, NULL);
-    if (window == NULL)
-    {
-        std::cout << "Failed to create GLFW window" << std::endl;
-        glfwTerminate();
-        return -1;
-    }
-    glfwMakeContextCurrent(window);
-    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
-    glfwSetCursorPosCallback(window, mouse_callback);
-    glfwSetScrollCallback(window, scroll_callback);
+    current_scene.loadModels();
+    GLFWwindow *window = OS::init();
 
     // Disable GLFW VSync
     glfwSwapInterval(0);
-
-    // Setup Dear ImGui context
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
-
-    // Build atlas
-    unsigned char* tex_pixels = nullptr;
-    int tex_w, tex_h;
-    io.Fonts->GetTexDataAsRGBA32(&tex_pixels, &tex_w, &tex_h);
-
-    // Setup Dear ImGui style
-    ImGui::StyleColorsLight();
-
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init("#version 330");
-
-    // tell GLFW to capture our mouse
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-
-    // glad: load all OpenGL function pointers
-    // ---------------------------------------
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
-    {
-        std::cout << "Failed to initialize GLAD" << std::endl;
-        return -1;
-    }
 
     // tell stb_image.h to flip loaded texture's on the y-axis (before loading model).
     stbi_set_flip_vertically_on_load(true);
@@ -104,33 +207,34 @@ int main()
     // -----------------------------
     glEnable(GL_DEPTH_TEST);
 
-    // build and compile shaders
-    // -------------------------
-    Shader shaderGeometryPass("g_buffer.vs", "g_buffer.fs");
-    Shader shaderLightingPass("deferred_shading.vs", "deferred_shading.fs");
-    Shader shaderLightBox("deferred_light_box.vs", "deferred_light_box.fs");
-
     // load models
     // -----------
-    Model backpack("resources/objects/backpack/backpack.obj");
-    std::vector<glm::vec3> objectPositions;
-    objectPositions.push_back(glm::vec3(-3.0, -0.5, -3.0));
-    objectPositions.push_back(glm::vec3(0.0, -0.5, -3.0));
-    objectPositions.push_back(glm::vec3(3.0, -0.5, -3.0));
-    objectPositions.push_back(glm::vec3(-3.0, -0.5, 0.0));
-    objectPositions.push_back(glm::vec3(0.0, -0.5, 0.0));
-    objectPositions.push_back(glm::vec3(3.0, -0.5, 0.0));
-    objectPositions.push_back(glm::vec3(-3.0, -0.5, 3.0));
-    objectPositions.push_back(glm::vec3(0.0, -0.5, 3.0));
-    objectPositions.push_back(glm::vec3(3.0, -0.5, 3.0));
+    for (const auto& entity : current_scene.entities) {
+        entities.push_back(entity);
+        Model model(entity.model_path);
 
+        models.push_back(model);
+
+		lineBoxes.push_back(LineBox(model.min, model.max, entity.entityID));
+    }
+
+    std::vector<Entity>().swap(current_scene.entities);
+
+    gizmo.init();
+
+
+    Line raycast_line(glm::vec3(0, 0, 0), glm::vec3(10, 5, 0));
+
+    // Shaders
+    // ------------
+    Shader shaderGeometryPass("Shaders/g_buffer.vs", "Shaders/g_buffer.fs");
+    Shader shaderLightingPass("Shaders/deferred_shading.vs", "Shaders/deferred_shading.fs");
+    Shader shaderLightBox("Shaders/deferred_light_box.vs", "Shaders/deferred_light_box.fs");
 
     // configure g-buffer framebuffer
     // ------------------------------
-    unsigned int gBuffer;
     glGenFramebuffers(1, &gBuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
-    unsigned int gPosition, gNormal, gAlbedoSpec;
     // position color buffer
     glGenTextures(1, &gPosition);
     glBindTexture(GL_TEXTURE_2D, gPosition);
@@ -156,7 +260,6 @@ int main()
     unsigned int attachments[3] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2 };
     glDrawBuffers(3, attachments);
     // create and attach depth buffer (renderbuffer)
-    unsigned int rboDepth;
     glGenRenderbuffers(1, &rboDepth);
     glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, SCR_WIDTH, SCR_HEIGHT);
@@ -166,11 +269,6 @@ int main()
         std::cout << "Framebuffer not complete!" << std::endl;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // lighting info
-    // -------------
-    const unsigned int NR_LIGHTS = 32;
-    std::vector<glm::vec3> lightPositions;
-    std::vector<glm::vec3> lightColors;
     srand(13);
     for (unsigned int i = 0; i < NR_LIGHTS; i++)
     {
@@ -197,133 +295,42 @@ int main()
     // -----------
     while (!glfwWindowShouldClose(window))
     {
-        // per-frame time logic
-        // --------------------
-        auto currentFrame = static_cast<float>(glfwGetTime());
-        deltaTime = currentFrame - lastFrame;
-        lastFrame = currentFrame;
+        OS::update(window);
+        OS::render(shaderGeometryPass, shaderLightingPass, shaderLightBox);
 
-        // input
-        // -----
-        processInput(window);
+        glm::mat4 projection = glm::perspective(glm::radians(OS::camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
+        glm::mat4 view = OS::camera.GetViewMatrix();
 
-        io.DisplaySize = ImVec2(1920, 1080);
-        io.DeltaTime = 1.0f / 60.0f;
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
+        float x = (2.0f * OS::mouse_position.x) / OS::display_width - 1.0f;
+        float y = 1.0f - (2.0f * OS::mouse_position.y) / OS::display_height;
+        float z = 1.0f;
+        glm::vec3 ray_nds = glm::vec3(x, y, z);
+        glm::vec4 ray_clip = glm::vec4(ray_nds.x, ray_nds.y, -1.0, 1.0);
+        glm::vec4 ray_eye = glm::inverse(projection) * ray_clip;
+        ray_eye = glm::vec4(ray_eye.x, ray_eye.y, -1.0, 0.0);
+        glm::vec3 ray_wor = glm::vec3((glm::inverse(view) * ray_eye).x, (glm::inverse(view) * ray_eye).y, (glm::inverse(view) * ray_eye).z);
+        // don't forget to normalise the vector at some point
+        ray_wor = glm::normalize(ray_wor);
+        raycast_line.setMVP(projection * view);
+        // set lines startPoint to middle of the screen - based on MVP
+        raycast_line.startPoint = OS::camera.Position + (OS::camera.Front);
+        // set lines endPoint to camera position - based on MVP
+        raycast_line.endPoint = OS::camera.Position + ray_wor * 1000.0f;
 
+        raycast_line.draw();
 
-        // render gui
-        // ------
-        gui_render();
-
-        ImGui::Render();
-
-        int display_w, display_h;
-        glfwGetFramebufferSize(window, &display_w, &display_h);
-
-       if (display_w != SCR_WIDTH || display_h != SCR_HEIGHT)
+        for (LineBox line_box : lineBoxes)
         {
-			SCR_WIDTH = display_w;
-            SCR_HEIGHT = display_h;
+            bool intersecting = false;
+            for (const auto& triangle : line_box.triangles)
+            {
+                Triangle3 world_triangle(triangle->a + line_box.position, triangle->b + line_box.position, triangle->c + line_box.position);
+                if (ray_intersects_triangle(OS::camera.Position + (OS::camera.Front), OS::camera.Position + ray_wor * 1000.0f, world_triangle, intersection_point)) intersecting = true;
+            }
 
-            // position color buffer
-            glBindTexture(GL_TEXTURE_2D, gPosition);
-            //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
-            // normal color buffer
-            glBindTexture(GL_TEXTURE_2D, gNormal);
-            //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
-            // color + specular color buffer
-            glBindTexture(GL_TEXTURE_2D, gAlbedoSpec);
-            //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-            glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
-            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, SCR_WIDTH, SCR_HEIGHT);
-
-            glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
-		}
-
-        // render
-        // ------
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        // 1. geometry pass: render scene's geometry/color data into gbuffer
-        // -----------------------------------------------------------------
-        glBindFramebuffer(GL_FRAMEBUFFER, gBuffer);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
-        glm::mat4 view = camera.GetViewMatrix();
-        glm::mat4 model = glm::mat4(1.0f);
-        shaderGeometryPass.use();
-        shaderGeometryPass.setMat4("projection", projection);
-        shaderGeometryPass.setMat4("view", view);
-        for (unsigned int i = 0; i < objectPositions.size(); i++)
-        {
-            model = glm::mat4(1.0f);
-            model = glm::translate(model, objectPositions[i]);
-            model = glm::scale(model, glm::vec3(0.25f));
-            shaderGeometryPass.setMat4("model", model);
-            backpack.Draw(shaderGeometryPass);
+            if (intersecting) if (line_box.checkCollision(intersection_point)) lineBoxes[line_box.objectID].show = true;
+            else lineBoxes[line_box.objectID].show = false;
         }
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-        // 2. lighting pass: calculate lighting by iterating over a screen filled quad pixel-by-pixel using the gbuffer's content.
-        // -----------------------------------------------------------------------------------------------------------------------
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        shaderLightingPass.use();
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, gPosition);
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, gNormal);
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, gAlbedoSpec);
-        // send light relevant uniforms
-        for (unsigned int i = 0; i < lightPositions.size(); i++)
-        {
-            shaderLightingPass.setVec3("lights[" + std::to_string(i) + "].Position", lightPositions[i]);
-            shaderLightingPass.setVec3("lights[" + std::to_string(i) + "].Color", lightColors[i]);
-            // update attenuation parameters and calculate radius
-            const float constant = 1.0f; // note that we don't send this to the shader, we assume it is always 1.0 (in our case)
-            const float linear = 0.7f;
-            const float quadratic = 1.8f;
-            shaderLightingPass.setFloat("lights[" + std::to_string(i) + "].Linear", linear);
-            shaderLightingPass.setFloat("lights[" + std::to_string(i) + "].Quadratic", quadratic);
-            // then calculate radius of light volume/sphere
-            const float maxBrightness = std::fmaxf(std::fmaxf(lightColors[i].r, lightColors[i].g), lightColors[i].b);
-            float radius = (-linear + std::sqrt(linear * linear - 4 * quadratic * (constant - (256.0f / 5.0f) * maxBrightness))) / (2.0f * quadratic);
-            shaderLightingPass.setFloat("lights[" + std::to_string(i) + "].Radius", radius);
-        }
-        shaderLightingPass.setVec3("viewPos", camera.Position);
-        // finally render quad
-        renderQuad();
-
-        // 2.5. copy content of geometry's depth buffer to default framebuffer's depth buffer
-        // ----------------------------------------------------------------------------------
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, gBuffer);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0); // write to default framebuffer
-        // blit to default framebuffer. Note that this may or may not work as the internal formats of both the FBO and default framebuffer have to match.
-        // the internal formats are implementation defined. This works on all of my systems, but if it doesn't on yours you'll likely have to write to the 		
-        // depth buffer in another shader stage (or somehow see to match the default framebuffer's internal format with the FBO's internal format).
-        glBlitFramebuffer(0, 0, SCR_WIDTH, SCR_HEIGHT, 0, 0, SCR_WIDTH, SCR_HEIGHT, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-        // 3. render lights on top of scene
-        // --------------------------------
-        shaderLightBox.use();
-        shaderLightBox.setMat4("projection", projection);
-        shaderLightBox.setMat4("view", view);
-        for (unsigned int i = 0; i < lightPositions.size(); i++)
-        {
-            model = glm::mat4(1.0f);
-            model = glm::translate(model, lightPositions[i]);
-            model = glm::scale(model, glm::vec3(0.125f));
-            shaderLightBox.setMat4("model", model);
-            shaderLightBox.setVec3("lightColor", lightColors[i]);
-            renderCube();
-        }
-
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
@@ -445,59 +452,4 @@ void renderQuad()
     glBindVertexArray(quadVAO);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glBindVertexArray(0);
-}
-
-// process all input: query GLFW whether relevant keys are pressed/released this frame and react accordingly
-// ---------------------------------------------------------------------------------------------------------
-void processInput(GLFWwindow* window)
-{
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-        glfwSetWindowShouldClose(window, true);
-
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-        camera.ProcessKeyboard(FORWARD, deltaTime);
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-        camera.ProcessKeyboard(BACKWARD, deltaTime);
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-        camera.ProcessKeyboard(LEFT, deltaTime);
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-        camera.ProcessKeyboard(RIGHT, deltaTime);
-}
-
-// glfw: whenever the window size changed (by OS or user resize) this callback function executes
-// ---------------------------------------------------------------------------------------------
-void framebuffer_size_callback(GLFWwindow* window, int width, int height)
-{
-    // make sure the viewport matches the new window dimensions; note that width and 
-    // height will be significantly larger than specified on retina displays.
-    glViewport(0, 0, width, height);
-}
-
-// glfw: whenever the mouse moves, this callback is called
-// -------------------------------------------------------
-void mouse_callback(GLFWwindow* window, double xposIn, double yposIn)
-{
-    float xpos = static_cast<float>(xposIn);
-    float ypos = static_cast<float>(yposIn);
-    if (firstMouse)
-    {
-        lastX = xpos;
-        lastY = ypos;
-        firstMouse = false;
-    }
-
-    float xoffset = xpos - lastX;
-    float yoffset = lastY - ypos; // reversed since y-coordinates go from bottom to top
-
-    lastX = xpos;
-    lastY = ypos;
-
-    camera.ProcessMouseMovement(xoffset, yoffset);
-}
-
-// glfw: whenever the mouse scroll wheel scrolls, this callback is called
-// ----------------------------------------------------------------------
-void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
-{
-    camera.ProcessMouseScroll(static_cast<float>(yoffset));
 }

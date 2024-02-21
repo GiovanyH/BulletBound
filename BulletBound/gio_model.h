@@ -6,6 +6,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_STATIC
 #include <stb_image.h>
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
@@ -22,7 +23,7 @@
 #include <vector>
 using namespace std;
 
-unsigned int TextureFromFile(const char* path, const string& directory, bool gamma = false);
+static unsigned int TextureFromFile(const char* path, const string& directory, bool gamma = false);
 
 class Model
 {
@@ -33,9 +34,14 @@ public:
     string directory;
     bool gammaCorrection;
 
+    glm::vec3 min;
+    glm::vec3 max;
+
     // constructor, expects a filepath to a 3D model.
     Model(string const& path, bool gamma = false) : gammaCorrection(gamma)
     {
+        min = glm::vec3(FLT_MAX, FLT_MAX, FLT_MAX);
+        max = glm::vec3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
         loadModel(path);
     }
 
@@ -102,6 +108,15 @@ private:
             vector.y = mesh->mVertices[i].y;
             vector.z = mesh->mVertices[i].z;
             vertex.Position = vector;
+
+            vector.x < this->min.x ? this->min.x = vector.x : this->min.x;
+            vector.y < this->min.y ? this->min.y = vector.y : this->min.y;
+            vector.z < this->min.z ? this->min.z = vector.z : this->min.z;
+
+            vector.x > this->max.x ? this->max.x = vector.x : this->max.x;
+            vector.y > this->max.y ? this->max.y = vector.y : this->max.y;
+            vector.z > this->max.z ? this->max.z = vector.z : this->max.z;
+
             // normals
             if (mesh->HasNormals())
             {
